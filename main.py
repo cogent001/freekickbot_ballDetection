@@ -3,10 +3,17 @@ import sys
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QEvent, QTimer, Qt
+from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import QApplication, QLabel
 
-from UI import MainWindow, TEXT_CYAN, TEXT_YELLOW, ICO_FLAG
+from UI import (
+    FONT_EMOJI,
+    FONT_SANS,
+    ICO_WAIT,
+    MainWindow,
+    TEXT_GRAY,
+)
 from pp_det_CIELAB_USBCam_tracking import (
     CONTROL_WINDOW,
     MIN_CIRCULARITY,
@@ -179,11 +186,161 @@ class TrackingProcessor:
 
 
 class TrackingMainWindow(MainWindow):
+    SCORE_FONT_SIZE = 208
+
     def __init__(self):
         self.processor = TrackingProcessor()
+        self._score_flash_on = False
+        self._goal_pulse_index = 0
         super().__init__()
+        self._adjust_game_layout()
+        self._setup_waiting_prompt()
+        self._setup_score_activity_timer()
+        self._setup_goal_effects()
+        self._set_waiting_score_style()
         self.camera_panel.video_label.setMouseTracking(True)
         self.camera_panel.video_label.installEventFilter(self)
+
+    def _adjust_game_layout(self):
+        self.timer_panel.setFixedHeight(104)
+        self.status_panel.setFixedHeight(70)
+
+        self.timer_panel.time_label.setFont(QFont(FONT_SANS, 42, QFont.Bold))
+        self.score_panel.score_label.setFont(QFont(FONT_SANS, self.SCORE_FONT_SIZE, QFont.Bold))
+
+        timer_layout = self.timer_panel.layout()
+        if timer_layout is not None:
+            timer_layout.setContentsMargins(22, 12, 22, 12)
+
+        for child in self.timer_panel.findChildren(type(self.timer_panel.time_label)):
+            if child is self.timer_panel.time_label:
+                continue
+            text = child.text()
+            if text == "\uc2dc\uac04":
+                child.setFont(QFont(FONT_SANS, 24, QFont.Bold))
+            elif text:
+                child.setFont(QFont(FONT_EMOJI, 22))
+
+    def _setup_waiting_prompt(self):
+        self.waiting_prompt_label = QLabel("START\ubc84\ud2bc \ub20c\ub7ec\uc8fc\uc138\uc694!")
+        self.waiting_prompt_label.setAlignment(Qt.AlignCenter)
+        self.waiting_prompt_label.setFont(QFont(FONT_SANS, 24, QFont.Bold))
+        self.waiting_prompt_label.setStyleSheet(
+            "color:#ffd56a;background:transparent;border:none;padding-bottom:18px;"
+        )
+
+        score_layout = self.score_panel.layout()
+        if score_layout is not None:
+            score_layout.addWidget(self.waiting_prompt_label)
+
+    def _setup_score_activity_timer(self):
+        self.score_activity_timer = QTimer(self)
+        self.score_activity_timer.timeout.connect(self._toggle_active_score_style)
+
+    def _setup_goal_effects(self):
+        self.goal_label = QLabel("GOAL!", self.score_panel)
+        self.goal_label.setAlignment(Qt.AlignCenter)
+        self.goal_label.setFont(QFont(FONT_SANS, 38, QFont.Bold))
+        self.goal_label.setStyleSheet(
+            "color:#ffffff;background:rgba(0,216,112,185);"
+            "border:2px solid #ffffff;border-radius:12px;padding:4px 18px;"
+        )
+        self.goal_label.hide()
+
+        self.goal_hide_timer = QTimer(self)
+        self.goal_hide_timer.setSingleShot(True)
+        self.goal_hide_timer.timeout.connect(self.goal_label.hide)
+
+        self.goal_pulse_timer = QTimer(self)
+        self.goal_pulse_timer.setInterval(70)
+        self.goal_pulse_timer.timeout.connect(self._advance_goal_pulse)
+        self.goal_pulse_steps = [
+            (260, "#ffffff"),
+            (244, "#fff0a8"),
+            (228, "#ffffff"),
+            (216, "#d6ffe7"),
+            (self.SCORE_FONT_SIZE, "#b8ffd6"),
+        ]
+
+    def _position_goal_label(self):
+        width = min(260, max(190, self.score_panel.width() - 80))
+        height = 64
+        x = (self.score_panel.width() - width) // 2
+        y = 58
+        self.goal_label.setGeometry(x, y, width, height)
+
+    def _set_waiting_score_style(self):
+        self._score_flash_on = False
+        self.score_panel.setStyleSheet(
+            "ScorePanel{background:#0d1e35;border:2px solid #f5a800;border-radius:14px;}"
+        )
+        self.score_panel.score_label.setStyleSheet(
+            "color:#f5a800;background:transparent;border:none;"
+        )
+
+    def _set_active_score_style(self, bright=False):
+        bg_color = "#12352c" if bright else "#0f2a28"
+        border_color = "#00ff88" if bright else "#00d870"
+        score_color = "#f7fff9" if bright else "#b8ffd6"
+        self.score_panel.setStyleSheet(
+            "ScorePanel{background:%s;border:3px solid %s;border-radius:14px;}"
+            % (bg_color, border_color)
+        )
+        self.score_panel.score_label.setStyleSheet(
+            "color:%s;background:transparent;border:none;" % score_color
+        )
+
+    def _toggle_active_score_style(self):
+        if not self.running:
+            self.score_activity_timer.stop()
+            self._set_waiting_score_style()
+            return
+
+        self._score_flash_on = not self._score_flash_on
+        self._set_active_score_style(self._score_flash_on)
+
+    def _start_score_activity(self):
+        self._score_flash_on = True
+        self._set_active_score_style(True)
+        self.score_activity_timer.start(500)
+
+    def _stop_score_activity(self):
+        self.score_activity_timer.stop()
+        self.goal_hide_timer.stop()
+        self.goal_pulse_timer.stop()
+        self.goal_label.hide()
+        self.score_panel.score_label.setFont(QFont(FONT_SANS, self.SCORE_FONT_SIZE, QFont.Bold))
+        self.waiting_prompt_label.show()
+        self._set_waiting_score_style()
+
+    def _play_goal_effect(self):
+        self.score_activity_timer.stop()
+        self._set_active_score_style(True)
+        self._position_goal_label()
+        self.goal_label.raise_()
+        self.goal_label.show()
+        self.goal_hide_timer.start(900)
+
+        self._goal_pulse_index = 0
+        self.goal_pulse_timer.start()
+        self._advance_goal_pulse()
+
+    def _advance_goal_pulse(self):
+        if self._goal_pulse_index >= len(self.goal_pulse_steps):
+            self.goal_pulse_timer.stop()
+            self.score_panel.score_label.setFont(QFont(FONT_SANS, self.SCORE_FONT_SIZE, QFont.Bold))
+            if self.running:
+                self._start_score_activity()
+            else:
+                self._set_waiting_score_style()
+            return
+
+        font_size, color = self.goal_pulse_steps[self._goal_pulse_index]
+        self.score_panel.score_label.setFont(QFont(FONT_SANS, font_size, QFont.Bold))
+        self.score_panel.score_label.setStyleSheet(
+            "color:%s;background:transparent;border:none;" % color
+        )
+        self._goal_pulse_index += 1
 
     def _setup_camera(self):
         self.cap = cv2.VideoCapture(0)
@@ -209,17 +366,23 @@ class TrackingMainWindow(MainWindow):
         self.camera_panel.update_frame(processed_frame)
 
         if self.running and detected_score != self.score:
+            scored = detected_score > self.score
             self.score = detected_score
             self.score_panel.set_score(self.score)
+            if scored:
+                self._play_goal_effect()
 
     def _start_game(self):
         self.processor.reset_score()
+        self.waiting_prompt_label.hide()
         super()._start_game()
+        self._start_score_activity()
 
     def _end_game(self):
         self.running = False
         self.game_timer.stop()
-        self.status_panel.set_status("\uc885\ub8cc", ICO_FLAG, TEXT_YELLOW)
+        self._stop_score_activity()
+        self.status_panel.set_status("\ub300\uae30", ICO_WAIT, TEXT_GRAY)
         self.status_panel.set_running(False)
 
     def _label_pos_to_frame_pos(self, pos):
@@ -287,10 +450,17 @@ class TrackingMainWindow(MainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._position_goal_label()
         self.raise_()
         self.activateWindow()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "goal_label"):
+            self._position_goal_label()
+
     def closeEvent(self, event):
+        self._stop_score_activity()
         self.processor.close()
         super().closeEvent(event)
 
