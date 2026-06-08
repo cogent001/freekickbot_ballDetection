@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import subprocess
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -187,9 +189,13 @@ class TrackingProcessor:
 
 class TrackingMainWindow(MainWindow):
     SCORE_FONT_SIZE = 208
+    BGM_PATH = Path(__file__).with_name("freekick_robot_pinball_bgm_60s.wav")
+    GOAL_SFX_PATH = Path(__file__).with_name("shooting_laser_missile_bump.wav")
 
     def __init__(self):
         self.processor = TrackingProcessor()
+        self.bgm_process = None
+        self.goal_sfx_process = None
         self._score_flash_on = False
         self._goal_pulse_index = 0
         super().__init__()
@@ -200,6 +206,66 @@ class TrackingMainWindow(MainWindow):
         self._set_waiting_score_style()
         self.camera_panel.video_label.setMouseTracking(True)
         self.camera_panel.video_label.installEventFilter(self)
+
+    def _start_bgm(self):
+        self._stop_bgm()
+        if not self.BGM_PATH.exists():
+            print("BGM file not found: %s" % self.BGM_PATH)
+            return
+
+        try:
+            self.bgm_process = subprocess.Popen(
+                ["aplay", "-q", str(self.BGM_PATH)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            self.bgm_process = None
+            print("BGM playback failed: %s" % exc)
+
+    def _stop_bgm(self):
+        if self.bgm_process is None:
+            return
+
+        if self.bgm_process.poll() is None:
+            self.bgm_process.terminate()
+            try:
+                self.bgm_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self.bgm_process.kill()
+                self.bgm_process.wait()
+
+        self.bgm_process = None
+
+    def _play_goal_sfx(self):
+        self._stop_goal_sfx()
+        if not self.GOAL_SFX_PATH.exists():
+            print("Goal SFX file not found: %s" % self.GOAL_SFX_PATH)
+            return
+
+        try:
+            self.goal_sfx_process = subprocess.Popen(
+                ["aplay", "-q", str(self.GOAL_SFX_PATH)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            self.goal_sfx_process = None
+            print("Goal SFX playback failed: %s" % exc)
+
+    def _stop_goal_sfx(self):
+        if self.goal_sfx_process is None:
+            return
+
+        if self.goal_sfx_process.poll() is None:
+            self.goal_sfx_process.terminate()
+            try:
+                self.goal_sfx_process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                self.goal_sfx_process.kill()
+                self.goal_sfx_process.wait()
+
+        self.goal_sfx_process = None
 
     def _adjust_game_layout(self):
         self.timer_panel.setFixedHeight(104)
@@ -314,6 +380,7 @@ class TrackingMainWindow(MainWindow):
         self._set_waiting_score_style()
 
     def _play_goal_effect(self):
+        self._play_goal_sfx()
         self.score_activity_timer.stop()
         self._set_active_score_style(True)
         self._position_goal_label()
@@ -377,10 +444,13 @@ class TrackingMainWindow(MainWindow):
         self.waiting_prompt_label.hide()
         super()._start_game()
         self._start_score_activity()
+        self._start_bgm()
 
     def _end_game(self):
         self.running = False
         self.game_timer.stop()
+        self._stop_goal_sfx()
+        self._stop_bgm()
         self._stop_score_activity()
         self.status_panel.set_status("\ub300\uae30", ICO_WAIT, TEXT_GRAY)
         self.status_panel.set_running(False)
@@ -460,6 +530,8 @@ class TrackingMainWindow(MainWindow):
             self._position_goal_label()
 
     def closeEvent(self, event):
+        self._stop_goal_sfx()
+        self._stop_bgm()
         self._stop_score_activity()
         self.processor.close()
         super().closeEvent(event)
