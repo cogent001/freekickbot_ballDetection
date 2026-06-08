@@ -1,9 +1,14 @@
+import json
+from pathlib import Path
+
 import cv2
 import numpy as np
 from collections import deque
 
 
 VIDEO_WINDOW = "Orange Ball Tracking (Lab)"
+CONTROL_WINDOW = "Controls"
+CONFIG_PATH = Path(__file__).with_name("pp_det_CIELAB_USBCam_tracking_controls.json")
 DEFAULT_ROI = (30, 160, 600, 460)
 MIN_CONFIRMED_HITS = 5
 SCORE_CONFIRM_FRAMES = 10
@@ -14,10 +19,82 @@ MIN_CIRCULARITY = 0.65
 USE_FILL_RATIO_FILTER = False
 MIN_FILL_RATIO = 0.45
 MAX_FILL_RATIO = 1.15
+TRACKBAR_SETTINGS = {
+    "L_min": {"default": 0, "max": 255},
+    "L_max": {"default": 255, "max": 255},
+    "A_min": {"default": 130, "max": 255},
+    "A_max": {"default": 200, "max": 255},
+    "B_min": {"default": 130, "max": 255},
+    "B_max": {"default": 255, "max": 255},
+    "Trail": {"default": 32, "max": 120},
+    "MaxDist": {"default": 80, "max": 250},
+}
 
 
 def nothing(x):
     pass
+
+
+def get_default_control_values():
+    return {name: setting["default"] for name, setting in TRACKBAR_SETTINGS.items()}
+
+
+def sanitize_control_values(values):
+    sanitized = get_default_control_values()
+
+    if not isinstance(values, dict):
+        return sanitized
+
+    for name, setting in TRACKBAR_SETTINGS.items():
+        try:
+            value = int(values.get(name, sanitized[name]))
+        except (TypeError, ValueError):
+            value = sanitized[name]
+
+        sanitized[name] = max(0, min(value, setting["max"]))
+
+    return sanitized
+
+
+def load_control_values():
+    if not CONFIG_PATH.exists():
+        return get_default_control_values()
+
+    try:
+        with CONFIG_PATH.open("r", encoding="utf-8") as config_file:
+            values = json.load(config_file)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"설정 파일을 읽을 수 없어 기본값을 사용합니다: {exc}")
+        return get_default_control_values()
+
+    print(f"저장된 컨트롤 값을 불러왔습니다: {CONFIG_PATH}")
+    return sanitize_control_values(values)
+
+
+def get_current_control_values():
+    return {
+        name: cv2.getTrackbarPos(name, CONTROL_WINDOW)
+        for name in TRACKBAR_SETTINGS
+    }
+
+
+def apply_control_values(values):
+    for name, value in sanitize_control_values(values).items():
+        cv2.setTrackbarPos(name, CONTROL_WINDOW, value)
+
+
+def save_control_values(values):
+    values = sanitize_control_values(values)
+
+    try:
+        with CONFIG_PATH.open("w", encoding="utf-8") as config_file:
+            json.dump(values, config_file, indent=2)
+            config_file.write("\n")
+    except OSError as exc:
+        print(f"컨트롤 값을 저장하지 못했습니다: {exc}")
+        return
+
+    print(f"컨트롤 값을 저장했습니다: {CONFIG_PATH}")
 
 
 class AdjustableRect:
@@ -287,15 +364,17 @@ class GoalScoreCounter:
 
 
 def create_controls_window():
-    cv2.namedWindow('Controls', cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('L_min', 'Controls', 0, 255, nothing)
-    cv2.createTrackbar('L_max', 'Controls', 255, 255, nothing)
-    cv2.createTrackbar('A_min', 'Controls', 130, 255, nothing)
-    cv2.createTrackbar('A_max', 'Controls', 200, 255, nothing)
-    cv2.createTrackbar('B_min', 'Controls', 130, 255, nothing)
-    cv2.createTrackbar('B_max', 'Controls', 255, 255, nothing)
-    cv2.createTrackbar('Trail', 'Controls', 32, 120, nothing)
-    cv2.createTrackbar('MaxDist', 'Controls', 80, 250, nothing)
+    control_values = load_control_values()
+
+    cv2.namedWindow(CONTROL_WINDOW, cv2.WINDOW_NORMAL)
+    for name, setting in TRACKBAR_SETTINGS.items():
+        cv2.createTrackbar(
+            name,
+            CONTROL_WINDOW,
+            control_values[name],
+            setting["max"],
+            nothing,
+        )
 
 
 def main():
@@ -315,7 +394,7 @@ def main():
         print("웹캠을 열 수 없습니다.")
         return 1
 
-    print("카메라 추적을 시작합니다. ESC 또는 Ctrl+C로 종료하세요.")
+    print("카메라 추적을 시작합니다. s=컨트롤 값 저장, a=초기값 복원, ESC 또는 Ctrl+C=종료")
     tracker = BallTracker()
     printed_frame_size = False
 
@@ -341,14 +420,14 @@ def main():
             lab = cv2.cvtColor(blurred, cv2.COLOR_BGR2Lab)
 
             # 트랙바에서 현재 임계값 읽기
-            L_min = cv2.getTrackbarPos('L_min', 'Controls')
-            L_max = cv2.getTrackbarPos('L_max', 'Controls')
-            A_min = cv2.getTrackbarPos('A_min', 'Controls')
-            A_max = cv2.getTrackbarPos('A_max', 'Controls')
-            B_min = cv2.getTrackbarPos('B_min', 'Controls')
-            B_max = cv2.getTrackbarPos('B_max', 'Controls')
-            trail_length = max(2, cv2.getTrackbarPos('Trail', 'Controls'))
-            max_distance = max(10, cv2.getTrackbarPos('MaxDist', 'Controls'))
+            L_min = cv2.getTrackbarPos('L_min', CONTROL_WINDOW)
+            L_max = cv2.getTrackbarPos('L_max', CONTROL_WINDOW)
+            A_min = cv2.getTrackbarPos('A_min', CONTROL_WINDOW)
+            A_max = cv2.getTrackbarPos('A_max', CONTROL_WINDOW)
+            B_min = cv2.getTrackbarPos('B_min', CONTROL_WINDOW)
+            B_max = cv2.getTrackbarPos('B_max', CONTROL_WINDOW)
+            trail_length = max(2, cv2.getTrackbarPos('Trail', CONTROL_WINDOW))
+            max_distance = max(10, cv2.getTrackbarPos('MaxDist', CONTROL_WINDOW))
 
             tracker.max_distance = max_distance
             tracker.set_trail_length(trail_length)
@@ -427,6 +506,11 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC
                 break
+            if key == ord('s'):
+                save_control_values(get_current_control_values())
+            elif key == ord('a'):
+                apply_control_values(get_default_control_values())
+                print("컨트롤 값을 초기값으로 되돌렸습니다.")
     except KeyboardInterrupt:
         print("\n사용자 중단으로 종료합니다.")
     finally:

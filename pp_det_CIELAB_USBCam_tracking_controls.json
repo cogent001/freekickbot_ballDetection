@@ -1,0 +1,10 @@
+{
+  "L_min": 0,
+  "L_max": 255,
+  "A_min": 144,
+  "A_max": 200,
+  "B_min": 146,
+  "B_max": 255,
+  "Trail": 32,
+  "MaxDist": 80
+}
